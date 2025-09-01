@@ -1,24 +1,54 @@
 #!/bin/bash
-# Script: estado_todos_usuarios.sh
-# Objetivo: Mostrar todos los usuarios del sistema (sin importar el shell)
-# y su estado de contraseña (ACTIVO / INACTIVO)
+# Script: estado_todos_usuarios_detallado.sh
+# Muestra TODOS los usuarios con:
+# - PASSWD_S (código crudo de `passwd -S`)
+# - SHADOW($2) (campo 2 de /etc/shadow)
+# - ESTATUS (interpretación)
 
-printf "%-25s %-15s\n" "USUARIO" "ESTADO"
-echo "----------------------------------------------------"
+printf "%-20s %-10s %-35s %-22s\n" "USUARIO" "PASSWD_S" "SHADOW(\$2)" "ESTATUS"
+echo "--------------------------------------------------------------------------------------------------------------"
 
-# Recorre todos los usuarios en /etc/passwd
-for user in $(cut -d: -f1 /etc/passwd); do
-    # Obtiene el campo de estado crudo desde passwd -S
-    estado_raw=$(sudo passwd -S "$user" 2>/dev/null | awk '{print $2}')
+# Recorre todos los usuarios definidos en /etc/passwd
+while IFS=: read -r user _ uid _ _ _ _; do
+  # Código crudo desde passwd -S (columna 2)
+  passwd_s=$(sudo passwd -S "$user" 2>/dev/null | awk '{print $2}')
 
-    # Normaliza a ACTIVO o INACTIVO
-    case "$estado_raw" in
-        P)   estado="ACTIVO" ;;
-        L|LK|!!|!* ) estado="INACTIVO" ;;
-        NP)  estado="INACTIVO (SIN CONTRASEÑA)" ;;
-        "")  estado="DESCONOCIDO" ;;   # cuando passwd -S no devuelve nada
-        *)   estado="OTRO: $estado_raw" ;;
+  # Campo crudo del /etc/shadow (columna 2 -> hash/flags)
+  shadow2=$(sudo awk -F: -v u="$user" '$1==u{print $2}' /etc/shadow 2>/dev/null)
+
+  # Normalización del ESTATUS (preferimos /etc/shadow cuando exista)
+  # Reglas:
+  # - Si SHADOW empieza con '!' o es '!!' o '*': INACTIVO (bloqueado/sin login)
+  # - Si SHADOW empieza con '$' (hash): ACTIVO
+  # - Si SHADOW vacío: INACTIVO (SIN CONTRASEÑA)
+  # - Si no hay SHADOW, usar PASSWD_S:
+  #   P=ACTIVO; L/LK/!!/*=INACTIVO; NP=INACTIVO (SIN CONTRASEÑA)
+  estatus="DESCONOCIDO"
+
+  if [[ -n "$shadow2" ]]; then
+    if [[ "$shadow2" == '!'* || "$shadow2" == '!!' || "$shadow2" == '*' ]]; then
+      estatus="INACTIVO"
+    elif [[ "$shadow2" == \$* ]]; then
+      estatus="ACTIVO"
+    elif [[ -z "$shadow2" ]]; then
+      estatus="INACTIVO (SIN CONTRASEÑA)"
+    else
+      # Casos raros (ej. '!*', '!' solo, etc.)
+      case "$shadow2" in
+        '!*'|'!'|*'!*'*) estatus="INACTIVO" ;;
+        *) estatus="OTRO ($shadow2)" ;;
+      esac
+    fi
+  else
+    # Sin acceso a shadow o no existe la entrada: usar passwd -S
+    case "$passwd_s" in
+      P)  estatus="ACTIVO" ;;
+      L|LK|!!|'*') estatus="INACTIVO" ;;
+      NP) estatus="INACTIVO (SIN CONTRASEÑA)" ;;
+      "") estatus="DESCONOCIDO" ;;
+      *)  estatus="OTRO ($passwd_s)" ;;
     esac
+  fi
 
-    printf "%-25s %-15s\n" "$user" "$estado"
-done
+  printf "%-20s %-10s %-35s %-22s\n" "$user" "${passwd_s:-N/A}" "${shadow2:-N/A}" "$estatus"
+done < /etc/passwd
