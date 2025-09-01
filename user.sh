@@ -6,8 +6,10 @@
 # - ESTATUS (interpretación)
 
 
-printf "otro script"
+printf "Cambio"
 printf "=========="
+
+printf "Primera línea\nSegunda línea\n"
 
 # Cruza /etc/passwd (para nombres) y /etc/shadow (estatus)
 while IFS=: read -r user _ uid _ _ _ _; do
